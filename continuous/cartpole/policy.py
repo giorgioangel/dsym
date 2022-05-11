@@ -1,47 +1,25 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
-#
-# Copyright 2021 Giorgio Angelotti
-#
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Affero General Public License for more details.
-#
-# You should have received a copy of the GNU Affero General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-from augment import collect
-import numpy as np
-import gym
-import tensorflow as tf
+#from augment import collect_d3rl
 import pandas as pd
-from sklearn.preprocessing import MaxAbsScaler, MinMaxScaler
-from stable_baselines3 import PPO
-from stable_baselines3.common.evaluation import evaluate_policy
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize, VecMonitor
-from gym import logger
-from check import StochasticCartPole
 import os
+from typing import Any, Callable, List, Optional, Tuple, Union
+import d3rlpy
+import gym
+import numpy as np
+from d3rlpy.algos import DiscreteCQL, DQN
+from d3rlpy.models.encoders import DefaultEncoderFactory
+from typing_extensions import Protocol
+from d3rlpy.dataset import Episode
+from d3rlpy.preprocessing.reward_scalers import RewardScaler
+from d3rlpy.preprocessing.stack import StackedObservation
+import math
 
-wd = os.getcwd()
-tfk = tf.keras
-tfkl = tfk.layers
 
-
-class ModelBasedCartPole(gym.Wrapper):
-    def __init__(self, env, model, state_scaler, action_scaler):
+class StochasticCartPole(gym.Wrapper):
+    def __init__(self, env, std=1.0):
+        self.std = std
         super().__init__(env)
         self.env = env
-        self.model = model
-        self.state_scaler = state_scaler
-        self.action_scaler = action_scaler
 
     def reset(self):
         self.state = self.np_random.uniform(low=-0.05, high=0.05, size=(4,))
@@ -52,23 +30,39 @@ class ModelBasedCartPole(gym.Wrapper):
         err_msg = f"{action!r} ({type(action)}) invalid"
         assert self.action_space.contains(action), err_msg
 
-        self.state = self.state.reshape((1, -1))
-        action = np.array([[action]])
+        x, x_dot, theta, theta_dot = self.state
+        force = np.random.normal(loc=self.force_mag, scale=self.std) if action == 1 else np.random.normal(loc=-self.force_mag, scale=self.std)
+        costheta = math.cos(theta)
+        sintheta = math.sin(theta)
 
-        self.state = self.state_scaler.transform(self.state)
-        action = self.action_scaler.transform(action)
+        # For the interested reader:
+        # https://coneural.org/florian/papers/05_cart_pole.pdf
+        temp = (
+                       force + self.polemass_length * theta_dot ** 2 * sintheta
+               ) / self.total_mass
+        thetaacc = (self.gravity * sintheta - costheta * temp) / (
+                self.length * (4.0 / 3.0 - self.masspole * costheta ** 2 / self.total_mass)
+        )
+        xacc = temp - self.polemass_length * thetaacc * costheta / self.total_mass
 
-        model_input = np.hstack((self.state, action))
+        if self.kinematics_integrator == "euler":
+            x = x + self.tau * x_dot
+            x_dot = x_dot + self.tau * xacc
+            theta = theta + self.tau * theta_dot
+            theta_dot = theta_dot + self.tau * thetaacc
+        else:  # semi-implicit euler
+            x_dot = x_dot + self.tau * xacc
+            x = x + self.tau * x_dot
+            theta_dot = theta_dot + self.tau * thetaacc
+            theta = theta + self.tau * theta_dot
 
-        self.state = self.model.predict(model_input)
-        self.state = self.state_scaler.inverse_transform(self.state)
+        self.state = (x, x_dot, theta, theta_dot)
 
-        self.state = self.state.reshape(-1)
         done = bool(
-            self.state[0] < -self.x_threshold
-            or self.state[0] > self.x_threshold
-            or self.state[2] < -self.theta_threshold_radians
-            or self.state[2] > self.theta_threshold_radians
+            x < -self.x_threshold
+            or x > self.x_threshold
+            or theta < -self.theta_threshold_radians
+            or theta > self.theta_threshold_radians
         )
 
         if not done:
@@ -78,20 +72,147 @@ class ModelBasedCartPole(gym.Wrapper):
             self.steps_beyond_done = 0
             reward = 1.0
         else:
-            if self.steps_beyond_done == 0:
-                logger.warn(
-                    "You are calling 'step()' even though this "
-                    "environment has already returned done = True. You "
-                    "should always call 'reset()' once you receive 'done = "
-                    "True' -- any further steps are undefined behavior."
-                )
             self.steps_beyond_done += 1
             reward = 0.0
 
-        return self.state, reward, done, {}
+        return np.array(self.state, dtype=np.float32), reward, done, {}
 
+
+def collect_d3rl(STEPS, mode):
+    if mode == 'det':
+        env = gym.make("CartPole-v1")
+    elif mode == 'stoch':
+        detenv = gym.make("CartPole-v1")
+        env = StochasticCartPole(detenv, std=2.0)
+    else:
+        raise ValueError("You did not select a correct environment type: 'stoch' or 'det'")
+
+    X = np.zeros((STEPS, 4))
+    Y = np.zeros((STEPS, 4))
+    A = np.zeros((STEPS, 1))
+    R = np.zeros((STEPS, 1))
+    terminals = np.zeros((STEPS, 1))
+    ep_terminals = np.zeros((STEPS, 1))
+    m = 0
+    for k in range(STEPS):
+        done = False
+        X[k + m] = env.reset()
+        while not done and k + m < STEPS:
+            a = env.action_space.sample()
+            A[k + m] = a
+            Y[k + m], R[k + m], done, _ = env.step(a)
+            if done:
+                terminals[k+m] = 1
+            if not done and k + m + 1 < STEPS:
+                X[k + m + 1] = Y[k + m]
+                m += 1
+
+        if k + m + 1 == STEPS:
+            ep_terminals[k+m] = 1
+            break
+    return X, A, R, Y, terminals, ep_terminals
+
+
+class AlgoProtocol(Protocol):
+    def predict(self, x: Union[np.ndarray, List[Any]]) -> np.ndarray:
+        ...
+
+    def predict_value(
+            self,
+            x: Union[np.ndarray, List[Any]],
+            action: Union[np.ndarray, List[Any]],
+            with_std: bool = False,
+    ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+        ...
+
+    @property
+    def n_frames(self) -> int:
+        ...
+
+    @property
+    def gamma(self) -> float:
+        ...
+
+    @property
+    def reward_scaler(self) -> Optional[RewardScaler]:
+        ...
+
+
+def my_evaluate_on_environment(
+        env: gym.Env, n_trials: int = 10, epsilon: float = 0.0, render: bool = False) -> Callable[..., float]:
+    """Returns scorer function of evaluation on environment.
+    This function returns scorer function, which is suitable to the standard
+    scikit-learn scorer function style.
+    The metrics of the scorer function is ideal metrics to evaluate the
+    resulted policies.
+    .. code-block:: python
+        import gym
+        from d3rlpy.algos import DQN
+        from d3rlpy.metrics.scorer import evaluate_on_environment
+        env = gym.make('CartPole-v0')
+        scorer = evaluate_on_environment(env)
+        cql = CQL()
+        mean_episode_return = scorer(cql)
+    Args:
+        env: gym-styled environment.
+        n_trials: the number of trials.
+        epsilon: noise factor for epsilon-greedy policy.
+        render: flag to render environment.
+    Returns:
+        scoerer function.
+    """
+
+    # for image observation
+    observation_shape = env.observation_space.shape
+    is_image = len(observation_shape) == 3
+
+    def scorer(algo: AlgoProtocol, *args: Any) -> float:
+        if is_image:
+            stacked_observation = StackedObservation(
+                observation_shape, algo.n_frames
+            )
+
+        episode_rewards = []
+        for _ in range(n_trials):
+            observation = env.reset()
+            episode_reward = 0.0
+
+            # frame stacking
+            if is_image:
+                stacked_observation.clear()
+                stacked_observation.append(observation)
+
+            while True:
+                # take action
+                if np.random.random() < epsilon:
+                    action = env.action_space.sample()
+                else:
+                    if is_image:
+                        action = algo.predict([stacked_observation.eval()])[0]
+                    else:
+                        action = algo.predict([observation])[0]
+
+                observation, reward, done, _ = env.step(action)
+                episode_reward += reward
+
+                if is_image:
+                    stacked_observation.append(observation)
+
+                if render:
+                    env.render()
+
+                if done:
+                    break
+            episode_rewards.append(episode_reward)
+        return float(np.mean(episode_rewards)), float(np.std(episode_rewards, ddof=1))
+
+    return scorer
 
 if __name__ == '__main__':
+    wd = os.getcwd()
+
+    d3rlpy.seed(181991)
+
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -111,84 +232,74 @@ if __name__ == '__main__':
     parser.add_argument('-k', type=str, action='store', dest='k',
                         help='Symmetry')
 
+    parser.add_argument('-g', type=bool, action='store', dest='gpu',
+                        help='GPU')
+
     params = parser.parse_args()
-    perf = np.zeros((params.s, params.N))
-    #perfstd = np.zeros((params.s, params.N, 2))
+    perfdqn = np.zeros((params.s, params.N))
+    perfcql = np.zeros((params.s, params.N))
+
+    perfstd = np.zeros((params.s, params.N, 2))
+
+    rwddqn = np.zeros((params.s, params.N))
+    rwddqn_sym = np.zeros((params.s, params.N))
+    rwdcql = np.zeros((params.s, params.N))
+    rwdcql_sym = np.zeros((params.s, params.N))
+
+    stddqn = np.zeros((params.s, params.N))
+    stddqn_sym = np.zeros((params.s, params.N))
+    stdcql = np.zeros((params.s, params.N))
+    stdcql_sym = np.zeros((params.s, params.N))
 
     for m in range(params.s):
         for k in range(params.N):
             print(m, k)
-            X, A, R, Y = collect((m+1)*params.t, params.e)
+            X, A, R, Y, ter, epter = collect_d3rl((m+1)*params.t, params.e)
             X = X.astype(np.float32)
             Y = Y.astype(np.float32)
             A = A.astype(np.float32)
 
-            # Preprocesing
-            state_scaler = MaxAbsScaler()
-            action_scaler = MinMaxScaler(feature_range=(-1, 1))
+            dataset = d3rlpy.dataset.MDPDataset(
+                observations=X,
+                actions=A,
+                rewards=R,
+                terminals=ter,
+                episode_terminals=epter,
+            )
 
-            state_scaler.fit(np.vstack((X, Y)))
-
-            scale_factor = 1. #put it to 1 and not 1.5
-
-            X = state_scaler.transform(X)*scale_factor
-            Y = state_scaler.transform(Y)*scale_factor
-            A = action_scaler.fit_transform(A)*scale_factor
-
-            ### Evaluation Dataset (10 **6 is a big number of steps)
-            evX, evA, evR, evY = collect(10 ** 5, params.e)
-
-            evX = np.array(evX).astype(np.float32)
-            evY = np.array(evY).astype(np.float32)
-            evA = np.array(evA).astype(np.float32)
-
-            evX = state_scaler.transform(evX) * scale_factor
-            evY = state_scaler.transform(evY) * scale_factor
-            evA = action_scaler.transform(evA) * scale_factor
-
-            evQa = np.hstack((evX, evA))
-
-            Qa = np.hstack((X, A))
-            Q = np.hstack((Qa, Y))
-
-            ### Dynamical model
-            dynamics = tfk.Sequential([
-                tfkl.InputLayer(input_shape=5),
-                tfkl.Dense(128, use_bias=True, kernel_initializer='he_uniform', activation=None),
-                tfkl.LeakyReLU(0.2),
-                tfkl.Dense(128, use_bias=True, kernel_initializer='he_uniform', activation=None),
-                tfkl.LeakyReLU(0.2),
-                tfkl.Dense(128, use_bias=True, kernel_initializer='he_uniform', activation=None),
-                tfkl.LeakyReLU(0.2),
-                tfkl.Dense(4, use_bias=True, kernel_initializer='he_uniform', activation='tanh')
-            ])
-
-            es = tf.keras.callbacks.EarlyStopping(patience=6, restore_best_weights=True)
-
-            dynamics.compile(optimizer='adam', loss='mse')
-            dynamics.fit(Qa, Y, batch_size=128, epochs=10000, shuffle=True, validation_split=0.1, callbacks=[es],
-                         verbose=0)
+            ### prepare dataset to extend
+            dataset_sym = d3rlpy.dataset.MDPDataset(
+                observations=X,
+                actions=A,
+                rewards=R,
+                terminals=ter,
+                episode_terminals=epter,
+            )
 
             if params.k == 'SAR':
                 Xsym = -np.copy(X)
-                Asym = -np.copy(A)
+                Asym = -np.copy(A)+1.
                 Ysym = -np.copy(Y)
+                eptersym = np.copy(epter)
 
             elif params.k == 'ISR':
                 Xsym = -np.copy(X)
                 Asym = np.copy(A)
                 Ysym = np.copy(Y)
+                eptersym = -np.copy(epter)+1.
 
             elif params.k == 'AI':
                 Xsym = np.copy(X)
-                Asym = -np.copy(A)
+                Asym = -np.copy(A)+1.
                 Ysym = np.copy(Y)
+                eptersym = np.copy(epter)
 
             elif params.k == 'SFI':
                 Xsym = np.copy(X)
                 Xsym[:, 0] *= -1
                 Asym = np.copy(A)
                 Ysym = np.copy(Y)
+                eptersym = -np.copy(epter)+1.
 
             elif params.k == 'TI':
                 Xsym = np.copy(X)
@@ -196,33 +307,19 @@ if __name__ == '__main__':
                 Asym = np.copy(A)
                 Ysym = np.copy(Y)
                 Ysym[:, 0] += 0.3 #because not scaling
+                eptersym = np.copy(epter)
 
             else:
                 raise ValueError("Select a symmetry between SAR, ISR, AI, SFI and TI")
 
-            XAsym = np.hstack((Xsym, Asym))
-
-            # augmenting the data set
-            QaSym = np.vstack((Qa, XAsym))
-            Ysym = np.vstack((Y, Ysym))
-
-            # Dynamical model with symmetry
-            dynamich = tfk.Sequential([
-                tfkl.InputLayer(input_shape=5),
-                tfkl.Dense(128, use_bias=True, kernel_initializer='he_uniform', activation=None),
-                tfkl.LeakyReLU(0.2),
-                tfkl.Dense(128, use_bias=True, kernel_initializer='he_uniform', activation=None),
-                tfkl.LeakyReLU(0.2),
-                tfkl.Dense(128, use_bias=True, kernel_initializer='he_uniform', activation=None),
-                tfkl.LeakyReLU(0.2),
-                tfkl.Dense(4, use_bias=True, kernel_initializer='he_uniform', activation='tanh')
-            ])
-
-            es = tf.keras.callbacks.EarlyStopping(patience=6, restore_best_weights=True)
-
-            dynamich.compile(optimizer='adam', loss='mse')
-            dynamich.fit(QaSym, Ysym, batch_size=128, epochs=10000, shuffle=True, validation_split=0.2, callbacks=[es],
-                         verbose=0)
+            dataset_mirror = d3rlpy.dataset.MDPDataset(
+                observations=Xsym,
+                actions=Asym,
+                rewards=R,
+                terminals=ter,
+                episode_terminals=epter,
+            )
+            dataset_sym.extend(dataset_mirror)
 
             if params.e == 'det':
                 cp = gym.make("CartPole-v1")
@@ -232,71 +329,53 @@ if __name__ == '__main__':
             else:
                 raise ValueError("You did not select a correct environment type: 'stoch' or 'det'")
             # Automatically normalize the input features and reward
-            '''
-            env = DummyVecEnv([lambda: cp])
-            env = VecMonitor(env)
-            env = VecNormalize(env, norm_obs=True, norm_reward=True)
-            # Instantiate the agent
-            model = PPO('MlpPolicy', env, verbose=0, device='cpu')
-            # Train the agent
-            model.learn(total_timesteps=int(1e5))
-            #env.training = False
-            env.norm_reward = False
-            rwdt, stdt = evaluate_policy(model, env, n_eval_episodes=100, deterministic=True)
-            del model, env
-            '''
-            BaseModel = ModelBasedCartPole(cp, dynamics, state_scaler, action_scaler)
-            #BaseModel = Monitor(BaseModel)
-            env = DummyVecEnv([lambda: BaseModel])
-            env = VecMonitor(env)
-            env = VecNormalize(env, norm_obs=True, norm_reward=True)
-            # Instantiate the agent
-            model = PPO('MlpPolicy', env, verbose=0, device='cpu')
-            # Train the agent
-            model.learn(total_timesteps=int(5e4))
-            # Save the agent
-            model.save(wd+'/continuous/cartpole/results/'+params.e+'ppo_base'+params.k)
 
-            env2 = DummyVecEnv([lambda: cp])
-            env2 = VecMonitor(env2)
-            env2 = VecNormalize(env2, norm_obs=True, norm_reward=True)
-            del model
-            model = PPO.load(wd+'/continuous/cartpole/results/'+params.e+'ppo_base'+params.k, env2, verbose=False, device='cpu')
-            env2.norm_reward = False
-            rwdbt, stdbt = evaluate_policy(model, env2, n_eval_episodes=100, deterministic=True)
-            #print('Base True', rwdbt, stdbt)
-            del model, BaseModel, env, env2
+            # Scaling
+            mean = np.zeros(4)
+            std = np.max(np.abs(dataset_sym.episodes[0].observations), axis=0)
+            scaler = d3rlpy.preprocessing.StandardScaler(mean=mean, std=std, eps=0)
 
-            SymModel = ModelBasedCartPole(cp, dynamich, state_scaler, action_scaler)
-            #SymModel = Monitor(SymModel)
-            env = DummyVecEnv([lambda: SymModel])
-            env = VecMonitor(env)
-            env = VecNormalize(env, norm_obs=True, norm_reward=True)
-            # Instantiate the agent
-            model = PPO('MlpPolicy', env, verbose=0, device='cpu')
-            # Train the agent
-            model.learn(total_timesteps=int(5e4))
-            # Save the agent
-            model.save(wd+'/continuous/cartpole/results/'+params.e+'ppo_sym'+params.k)
-            #rwds, stds = evaluate_policy(model, env, n_eval_episodes=30, deterministic=True)
+            #
+            #encoder = DefaultEncoderFactory(use_batch_norm=True)
+
+            # DQN
+            dqn = DQN(learning_rate=18e-6, batch_size=256, scaler=scaler, target_update_interval=8000, use_gpu=params.gpu)
+            dqn.fit(dataset, n_steps=50*(m+1)*params.t, save_metrics=False)
+            dqn_sym = DQN(learning_rate=18e-6, batch_size=256, scaler=scaler, target_update_interval=8000, use_gpu=params.gpu)
+            dqn_sym.fit(dataset_sym, n_steps=50*(m+1)*params.t, save_metrics=False)
 
 
-            env2 = DummyVecEnv([lambda: cp])
-            env2 = VecMonitor(env2)
-            env2 = VecNormalize(env2, norm_obs=True, norm_reward=True)
-            del model
-            model = PPO.load(wd+'/continuous/cartpole/results/'+params.e+'ppo_sym'+params.k, env2, verbose=False, device='cpu')
-            env2.norm_reward = False
-            rwdst, stdst = evaluate_policy(model, env2, n_eval_episodes=100, deterministic=True)
+            # setup CQL algorithm
+            cql = DiscreteCQL(learning_rate=18e-6, alpha=0.9, batch_size=256, use_gpu=params.gpu, target_update_interval=8000, scaler=scaler)
+            # start training
+            cql.fit(dataset, n_steps=50*(m+1)*params.t, save_metrics=False)
 
-            #perf[m, k, 0] = rwdt
-            perf[m, k] = rwdbt-rwdst
-            #perfstd[m, k, 0] = stdt
-            #perfstd[m, k, 0] = stdbt
-            #perfstd[m, k, 1] = stdst
-            df1 = pd.DataFrame(perf)
+            cql_sym = DiscreteCQL(learning_rate=18e-6, alpha=0.9, batch_size=256, encoder=params.gpu, use_gpu=True, target_update_interval=8000, scaler=scaler)
+            cql_sym.fit(dataset_sym, n_steps=50*(m+1)*params.t, save_metrics=False)
+
+            rwddqn[m, k], stddqn[m, k] = my_evaluate_on_environment(cp, n_trials=100)(dqn)
+            rwddqn_sym[m, k], stddqn_sym[m, k] = my_evaluate_on_environment(cp, n_trials=100)(dqn_sym)
+            rwdcql[m, k], stdcql[m, k] = my_evaluate_on_environment(cp, n_trials=100)(cql)
+            rwdcql_sym[m, k], stdcql_sym[m, k] = my_evaluate_on_environment(cp, n_trials=100)(cql_sym)
+
+            perfdqn[m, k] = rwddqn_sym[m, k] - rwddqn[m, k]
+            perfcql[m, k] = rwdcql_sym[m, k] - rwdcql[m, k]
+
+            df1 = pd.DataFrame(perfdqn)
             df1.to_csv(
-                wd + '/continuous/cartpole/results/polmean_' + params.e + '_' + params.k + '_' + str(
+                wd + '/continuous/cartpole/results/polmean_dqn_' + params.e + '_' + params.k + '_' + str(
                     params.t) + '_' + str(params.N) + '_' + str(
                     params.s) + '.csv')
             del df1
+
+            df4 = pd.DataFrame(perfcql)
+            df4.to_csv(
+                wd + '/continuous/cartpole/results/polmean_cql_' + params.e + '_' + params.k + '_' + str(
+                    params.t) + '_' + str(params.N) + '_' + str(
+                    params.s) + '.csv')
+            del df4
+
+            np.savez_compressed(wd + '/continuous/cartpole/results/polmean_' + params.e + '_' + params.k + '_' + str(
+                    params.t) + '_' + str(params.N) + '_' + str(
+                    params.s) + '.npz', rdqn=rwddqn, sdqn=stddqn, rcql=rwdcql, scql=stdcql, rdqns=rwddqn_sym,
+                                sdqns=stddqn_sym, rcqls=rwdcql_sym, scqls=stdcql_sym, allow_pickle=True)

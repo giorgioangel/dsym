@@ -1,8 +1,6 @@
-# Expert-guided Symmetry Detection in MDPs
+# Exploiting Expert Guided Symmetry detection in Offline Reinforcement Learning
 
-This is the official repository of the paper "Expert-guided Symmetry Detection in Markov Decision Processes" accepted to the 14th International Conference on Agents and Artificial Intelligence - ICAART 2022 ( arXiv preprint https://arxiv.org/abs/2111.10297 ).
-
-Some part of the code concerns a preliminary version of an extension of the work submitted to another venue.
+This is the official repository of the paper "Exploiting Expert Guided Symmetry detection in Offline Reinforcement Learning" submitted to NeurIPS 2022.
 
 ## Table of contents
 
@@ -17,22 +15,8 @@ Some part of the code concerns a preliminary version of an extension of the work
 The code has been tested on the minimal version reported.
 
 ```shell script
-pip install --user -r requirements.txt
+conda install --file requirements.txt
 ```
-
-1. gym==0.19.0
-2. keras==2.7.0
-3. numpy==1.20.0
-4. numba==0.54.1
-5. pandas==1.3.4
-6. scikit-learn==1.0.1
-7. scipy==1.7.2
-8. stable-baselines3==1.3.0
-9. tensorflow-gpu==2.7.0
-10. tensorflow-probability==0.12.2
-11. torch==1.10.0
-12. tqdm==4.62.3
-
 
 
 ## Quick start
@@ -45,7 +29,7 @@ Similar reasoning for the other scripts, look at the code.
 
 Example:
 ```shell script
-python discrete/check.py -e det -k TRSAI -l 10 -t 1000 -b 100 -s 10
+python continuous/cartpole/policy.py -e stoch -b 30 -s 10 -t 1000 -k SAR
 ```
 Output:
 ```shell script
@@ -104,6 +88,6 @@ Giorgio Angelotti
 
 ## Copyright and license
 
-Code and documentation copyright 2021 the authors. Code released under the [GNU-AGPLv3 License]
+Code and documentation copyright 2022 the authors. Code released under the [GNU-AGPLv3 License]
 
 Enjoy
