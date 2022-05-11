@@ -31,10 +31,6 @@ Example:
 ```shell script
 python continuous/cartpole/policy.py -e stoch -b 30 -s 10 -t 1000 -k SAR
 ```
-Output:
-```shell script
-check_counter_10_det_TRSAI_1000_100_10.csv
-```
 
 ## Parameters
 - -e env_type: string - det, stoch
