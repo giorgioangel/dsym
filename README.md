@@ -1,6 +1,8 @@
 # Exploiting Expert Guided Symmetry detection in Offline Reinforcement Learning
 
-This is the official repository of the paper "Exploiting Expert Guided Symmetry detection in Offline Reinforcement Learning" submitted to NeurIPS 2022.
+This is the official repository of the papers "Expert-Guided Symmetry Detection in Markov Decision Processes" presented
+at [ICAART 2022](https://www.scitepress.org/Papers/2022/107834/107834.pdf) and "Data Augmentation through Expert-guided Symmetry Detection to
+Improve Performance in Offline Reinforcement Learning" to be presented at ICAART 2023.
 
 ## Table of contents
 
@@ -75,15 +77,12 @@ dsym/
 └── LICENSE # GNU Affero General Public License
 
 ```
-
 ## Creators
-
-**Creator 1**
 
 Giorgio Angelotti
 
 ## Copyright and license
 
-Code and documentation copyright 2022 the authors. Code released under the [GNU-AGPLv3 License]
+Code and documentation copyright 2023 the authors. Code released under the [GNU-AGPLv3 License]
 
 Enjoy
