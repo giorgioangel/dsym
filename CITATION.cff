@@ -2,23 +2,48 @@ cff-version: 1.2.0
 message: "Cite it as below."
 title: "Expert-guided Symmetry Detection in Markov Decision Processes"
 authors:
-        - family-names: "Angelotti"
-          given-names: "Giorgio"
-          orcid: "https://orcid.org/0000-0002-1878-5833"
+- family-names: "Angelotti"
+  given-names: "Giorgio"
+  orcid: "https://orcid.org/0000-0002-1878-5833"
 license: GNU-AGPLv3
+preferred-citation:
+    type: conference-paper
+    title: "Expert-guided Symmetry Detection in Markov Decision Processes"
+    authors:
+    - family-names: "Angelotti"
+      given-names: "Giorgio"
+      orcid: "https://orcid.org/0000-0002-1878-5833"
+    - family-names: "Drougard"
+      given-names: "Nicolas"
+      orcid: "https://orcid.org/0000-0003-0002-9973"
+    - family-names: "Chanel Ponzoni Carvalho"
+      given-names: "Caroline"
+      orcid: "https://orcid.org/0000-0003-3578-4186"
+    year: 2022
+    collection-title: Proceedings of the 14th International Conference on Agents and Artificial Intelligence - Volume 2: ICAART
+    publisher:
+      name: SciTePress
+    institution:
+      name: INSTICC
+    start: 88 # First page number
+    end: 98 # Last page number
+    volume: 2
+    doi: "10.5220/0010783400003116"
+    isbn: "978-989-758-547-0"
+    issn: "2184-433X"
 references:
     - type: conference-paper
       title: "Expert-guided Symmetry Detection in Markov Decision Processes"
       authors:
-        - family-names: "Angelotti"
-          given-names: "Giorgio"
-          orcid: "https://orcid.org/0000-0002-1878-5833"
-        - family-names: "Drougard"
-          given-names: "Nicolas"
-          orcid: "https://orcid.org/0000-0003-0002-9973"
-        - family-names: "Chanel Ponzoni Carvalho"
-          given-names: "Caroline"
-          orcid: "https://orcid.org/0000-0003-3578-4186"
+      - family-names: "Angelotti"
+        given-names: "Giorgio"
+        orcid: "https://orcid.org/0000-0002-1878-5833"
+      - family-names: "Drougard"
+        given-names: "Nicolas"
+        orcid: "https://orcid.org/0000-0003-0002-9973"
+      - family-names: "Chanel Ponzoni Carvalho"
+        given-names: "Caroline"
+        orcid: "https://orcid.org/0000-0003-3578-4186"
       year: 2022
       collection-title: Proceedings of the 14th International Conference on Agents and Artificial Intelligence - Volume 2: ICAART
       publisher:
