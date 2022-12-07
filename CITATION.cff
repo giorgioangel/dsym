@@ -1,5 +1,11 @@
 cff-version: 1.2.0
 message: "Cite it as below."
+title: "Expert-guided Symmetry Detection in Markov Decision Processes"
+authors:
+        - family-names: "Angelotti"
+          given-names: "Giorgio"
+          orcid: "https://orcid.org/0000-0002-1878-5833"
+license: GNU-AGPLv3
 references:
     - type: conference-paper
       title: "Expert-guided Symmetry Detection in Markov Decision Processes"
